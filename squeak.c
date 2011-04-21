@@ -48,6 +48,7 @@ void* runInterpret(void *arg);
 int32_t interpret();
 
 int32_t toQuit = 0;
+volatile int32_t count = 0;
 
 
 static struct PPB_Var_Deprecated* var_interface = NULL;
@@ -278,7 +279,7 @@ PPP_InitializeModule(PP_Module a_module_id, PPB_GetInterface get_browser_interfa
   strcat(status, "initialize module");
   {
     int ret = 0;
-    //ret = pthread_create(&interpret_thread, NULL, runInterpret, NULL);
+    ret = pthread_create(&interpret_thread, NULL, runInterpret, NULL);
     sprintf(buffer, "thread create %d\n", ret);
     strcat(status, buffer);
     
@@ -420,7 +421,8 @@ Paint()
 {
   pthread_mutex_lock(&interpret_mutex);
   pthread_cond_signal(&interpret_cond);
-  strcat(status, "paint 1\n");
+  sprintf(buffer, "paint 1, count = %d\n", (int)count);
+  strcat(status, buffer);
   if (!flush_pending) {
     strcat(status, "paint 2\n");
     FlushPixelBuffer();
@@ -434,6 +436,7 @@ isContextValid()
   return gc != 0;
 }
 
+#if 0
 int32_t
 ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, int32_t aL, int32_t aR, int32_t aT, int32_t aB)
 {
@@ -456,14 +459,17 @@ ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, 
   }
   return 0;
 }
+#endif
 
 void*
 runInterpret(void *arg)
 {
+  strcat(status, "run interpret\n");
   interpret();
   return NULL;
 }
 
+#if 0
 int32_t
 interpret()
 {
@@ -494,6 +500,16 @@ interpret()
       }
       ioShowDisplay(display, 200, 200, 32, 0, 200, 0, 200);
     }
+  }
+  return 0;
+}
+#endif
+
+int32_t
+interpret()
+{
+  while(1) {
+    count++;
   }
   return 0;
 }
