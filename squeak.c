@@ -41,7 +41,7 @@ static struct PP_Var Instance_GetInstanceObject(PP_Instance instance);
 static void DestroyContext(PP_Instance instance);
 static void CreateContext(PP_Instance instance, const struct PP_Size* size);
 static void FlushPixelBuffer();
-static struct PP_Var Paint();
+static void Paint();
 static PP_Bool isContextValid();
 
 void* runInterpret(void *arg);
@@ -58,13 +58,15 @@ const struct PPB_ImageData* image_data_;
 const struct PPB_Core* core_;
 const struct PPB_Instance* instance_;
 
-PP_Resource gc = 0;
-PP_Resource image = 0;
-pthread_mutex_t image_mutex;
-pthread_t interpret_thread;
+static PP_Resource gc = 0;
+static PP_Resource image = 0;
+static pthread_mutex_t image_mutex;
+static pthread_mutex_t interpret_mutex;
+static pthread_t interpret_thread;
+static pthread_cond_t interpret_cond = PTHREAD_COND_INITIALIZER;
 
-const char* const kPaintMethodId = "paint";
-const char* const kGetStatusMethodId = "getStatus";
+static const char* const kPaintMethodId = "paint";
+static const char* const kGetStatusMethodId = "getStatus";
 
 static int32_t flush_pending;
 
@@ -145,12 +147,6 @@ Instance_DidCreate(PP_Instance instance,
                                   const char* argn[],
                                   const char* argv[])
 {
-  int ret;
-  strcat(status, "create\n");
-  ret = pthread_create(&interpret_thread, NULL, runInterpret, NULL);
-  sprintf(buffer, "thread create %d\n", ret);
-  strcat(status, buffer);
-  pthread_mutex_init(&image_mutex, NULL);
   return PP_TRUE;
 }
 
@@ -162,10 +158,10 @@ Instance_DidChangeView(PP_Instance instance,
 		       const struct PP_Rect* position,
 		       const struct PP_Rect* clip)
 {
-  strcat(status, "change view\n");
   if (position->size.width == screenWidth &&
       position->size.height == screenHeight)
     return;  // Size didn't change, no need to update anything.
+  strcat(status, "change view\n");
   DestroyContext(instance);
   CreateContext(instance, &position->size);
 }
@@ -244,8 +240,10 @@ Squeak_Call(void* object,
   struct PP_Var v = PP_MakeInt32(0);
   const char* method_name = VarToCStr(name);
   if (NULL != method_name) {
-    if (strcmp(method_name, kPaintMethodId) == 0)
+    if (strcmp(method_name, kPaintMethodId) == 0) {
       Paint();
+      return v;
+    }
     if (strcmp(method_name, kGetStatusMethodId) == 0)
       return StrToVar(status);
   }
@@ -278,6 +276,17 @@ PPP_InitializeModule(PP_Module a_module_id, PPB_GetInterface get_browser_interfa
   ppp_class.Call = Squeak_Call;
   ppp_class.HasMethod = Squeak_HasMethod;
   strcat(status, "initialize module");
+  {
+    int ret = 0;
+    //ret = pthread_create(&interpret_thread, NULL, runInterpret, NULL);
+    sprintf(buffer, "thread create %d\n", ret);
+    strcat(status, buffer);
+    
+    pthread_mutex_init(&image_mutex, NULL);
+    pthread_mutex_init(&interpret_mutex, NULL);
+    pthread_cond_init (&interpret_cond, NULL);
+  }
+
   return PP_OK;
 }
 
@@ -312,12 +321,12 @@ DestroyContext(PP_Instance instance)
 {
   strcat(status, isContextValid() ? "destroy good\n" : "destroy bad\n");
   if (isContextValid()) {
-    pthread_mutex_lock(&image_mutex);
+    //    pthread_mutex_lock(&image_mutex);
     core_->ReleaseResource(gc);
     gc = 0;
     core_->ReleaseResource(image);
     image = 0;
-    pthread_mutex_unlock(&image_mutex);
+    //    pthread_mutex_unlock(&image_mutex);
   }
 }
 
@@ -330,7 +339,7 @@ CreateContext(PP_Instance instance, const struct PP_Size* size)
   strcat(status, "making gc\n");
   sprintf(buffer, "size: %d, %d\n", (int)size->width, (int)size->height);
   strcat(status, buffer);
-  pthread_mutex_lock(&image_mutex);
+  //  pthread_mutex_lock(&image_mutex);
   gc = graphics_2d_->Create(instance, size, false);
   if (!isContextValid() /*graphics_2d_->IsGraphics2D(gc)*/)
     strcat(status, "failed to create gc\n");
@@ -344,7 +353,17 @@ CreateContext(PP_Instance instance, const struct PP_Size* size)
 				PP_FALSE);
   getDesc();
   sprintf(buffer, "desc %d, %d, %d, %d\n", (int)desc.format, (int)desc.size.width, (int)desc.size.height, (int)desc.stride);
-  pthread_mutex_unlock(&image_mutex);
+  {
+    uint32_t *pixels = image_data_->Map(image);
+    int i, j;
+    for (j = 0; j < screenHeight; j++) {
+      for (i = 0; i < screenWidth; i++) {
+	pixels[j*(screenStride/4)+i] = 0x7F0F7FFF;
+      }
+    }
+    image_data_->Unmap(image);
+  }
+  //  pthread_mutex_unlock(&image_mutex);
 }
 
 static void
@@ -374,7 +393,7 @@ FlushPixelBuffer()
   flush_pending = 1;
   graphics_2d_->Flush(gc, CompletionCallback);
 }
-
+#if 0
 static void
 FlushPixelBufferInSync()
 {
@@ -394,16 +413,19 @@ FlushPixelBufferInSync()
   /*  CompletionCallback.func = NULL; */
   graphics_2d_->Flush(gc, CompletionCallback);
 }
+#endif
 
-static struct PP_Var
+static void
 Paint()
 {
+  pthread_mutex_lock(&interpret_mutex);
+  pthread_cond_signal(&interpret_cond);
   strcat(status, "paint 1\n");
   if (!flush_pending) {
     strcat(status, "paint 2\n");
     FlushPixelBuffer();
   }
-  return StrToVar(status);
+  pthread_mutex_unlock(&interpret_mutex);
 }
 
 static PP_Bool
@@ -421,7 +443,7 @@ ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, 
     pthread_exit(NULL);
   }
   if (isContextValid()) {
-    pthread_mutex_lock(&image_mutex);
+    //    pthread_mutex_lock(&image_mutex);
     pixels = image_data_->Map(image);
     for (j = 0; j < screenHeight; j++) {
       for (i = 0; i < screenWidth; i++) {
@@ -429,8 +451,8 @@ ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, 
       }
     }
     image_data_->Unmap(image);
-    pthread_mutex_unlock(&image_mutex);
-    FlushPixelBufferInSync();
+    //    pthread_mutex_unlock(&image_mutex);
+    FlushPixelBuffer();
   }
   return 0;
 }
@@ -448,13 +470,21 @@ interpret()
   uint32_t *display = core_->MemAlloc(200*200*4);
   PP_TimeTicks lastTime = core_->GetTimeTicks();
   PP_TimeTicks startTime = lastTime;
+  int count = 0;
   while(1) {
+    pthread_mutex_lock(&interpret_mutex);
+    pthread_cond_wait(&interpret_cond, &interpret_mutex);
+    pthread_mutex_unlock(&interpret_mutex);
+    count++;
     PP_TimeTicks now = core_->GetTimeTicks();
-    if ((now - lastTime) > 0.5) {
-      unsigned char r, g, b, c;
+    if (count > 0) {
+    /*if ((now - lastTime) > 0.5) { */
+      unsigned char r, g = 0, b, c;
       uint32_t i, j;
       r = (unsigned char)((now - startTime) / 0.1 + mouseX);
       b = (unsigned char)((now - startTime) / 0.1 + mouseY);
+      sprintf(buffer, "%x, %x, %x\n", (unsigned int)((r+i)&0xFF), (unsigned int)g&0xFF, (unsigned int)(b&0xFF));
+      strcat(status, buffer);
       for (j = 0; j < 200; j++) {
 	g = j;
 	for (i = 0; i < 200; i++) {
@@ -463,8 +493,6 @@ interpret()
 	}
       }
       ioShowDisplay(display, 200, 200, 32, 0, 200, 0, 200);
-    } else {
-      usleep(100);
     }
   }
   return 0;
