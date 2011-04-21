@@ -183,6 +183,12 @@ Instance_HandleInputEvent(PP_Instance instance,
     sprintf(buffer, "mouse: %d, %d\n", (int)mouseX, (int)mouseY);
     strcat(status, buffer);
   }
+  if (event->type == PP_INPUTEVENT_TYPE_MOUSEMOVE) {
+    mouseX = event->u.mouse.x;
+    mouseY = event->u.mouse.y;
+    sprintf(buffer, "mouse: %d, %d\n", (int)mouseX, (int)mouseY);
+    strcat(status, buffer);
+  }
   return PP_TRUE;
 }
 
