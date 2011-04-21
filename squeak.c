@@ -278,11 +278,6 @@ PPP_InitializeModule(PP_Module a_module_id, PPB_GetInterface get_browser_interfa
   ppp_class.HasMethod = Squeak_HasMethod;
   strcat(status, "initialize module");
   {
-    int ret = 0;
-    ret = pthread_create(&interpret_thread, NULL, runInterpret, NULL);
-    sprintf(buffer, "thread create %d\n", ret);
-    strcat(status, buffer);
-    
     pthread_mutex_init(&image_mutex, NULL);
     pthread_mutex_init(&interpret_mutex, NULL);
     pthread_cond_init (&interpret_cond, NULL);
@@ -322,12 +317,12 @@ DestroyContext(PP_Instance instance)
 {
   strcat(status, isContextValid() ? "destroy good\n" : "destroy bad\n");
   if (isContextValid()) {
-    //    pthread_mutex_lock(&image_mutex);
+    pthread_mutex_lock(&image_mutex);
     core_->ReleaseResource(gc);
     gc = 0;
     core_->ReleaseResource(image);
     image = 0;
-    //    pthread_mutex_unlock(&image_mutex);
+    pthread_mutex_unlock(&image_mutex);
   }
 }
 
@@ -340,7 +335,7 @@ CreateContext(PP_Instance instance, const struct PP_Size* size)
   strcat(status, "making gc\n");
   sprintf(buffer, "size: %d, %d\n", (int)size->width, (int)size->height);
   strcat(status, buffer);
-  //  pthread_mutex_lock(&image_mutex);
+  /*pthread_mutex_lock(&image_mutex);*/
   gc = graphics_2d_->Create(instance, size, false);
   if (!isContextValid() /*graphics_2d_->IsGraphics2D(gc)*/)
     strcat(status, "failed to create gc\n");
@@ -359,12 +354,17 @@ CreateContext(PP_Instance instance, const struct PP_Size* size)
     int i, j;
     for (j = 0; j < screenHeight; j++) {
       for (i = 0; i < screenWidth; i++) {
-	pixels[j*(screenStride/4)+i] = 0x7F0F7FFF;
+	pixels[j*(screenStride/4)+i] = (j<<24)+ (i<<8) + 0xFF;
       }
     }
     image_data_->Unmap(image);
   }
-  //  pthread_mutex_unlock(&image_mutex);
+  /*pthread_mutex_unlock(&image_mutex); */
+  {
+    int ret = pthread_create(&interpret_thread, NULL, runInterpret, NULL);
+    sprintf(buffer, "thread create %d\n", ret);
+    strcat(status, buffer);
+  }
 }
 
 static void
@@ -419,15 +419,12 @@ FlushPixelBufferInSync()
 static void
 Paint()
 {
-  pthread_mutex_lock(&interpret_mutex);
-  pthread_cond_signal(&interpret_cond);
   sprintf(buffer, "paint 1, count = %d\n", (int)count);
   strcat(status, buffer);
   if (!flush_pending) {
     strcat(status, "paint 2\n");
     FlushPixelBuffer();
   }
-  pthread_mutex_unlock(&interpret_mutex);
 }
 
 static PP_Bool
@@ -436,7 +433,6 @@ isContextValid()
   return gc != 0;
 }
 
-#if 0
 int32_t
 ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, int32_t aL, int32_t aR, int32_t aT, int32_t aB)
 {
@@ -445,8 +441,8 @@ ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, 
   if (toQuit) {
     pthread_exit(NULL);
   }
+  /*pthread_mutex_lock(&image_mutex);*/
   if (isContextValid()) {
-    //    pthread_mutex_lock(&image_mutex);
     pixels = image_data_->Map(image);
     for (j = 0; j < screenHeight; j++) {
       for (i = 0; i < screenWidth; i++) {
@@ -454,12 +450,11 @@ ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, 
       }
     }
     image_data_->Unmap(image);
-    //    pthread_mutex_unlock(&image_mutex);
-    FlushPixelBuffer();
+    /*FlushPixelBuffer();*/
   }
+  /*pthread_mutex_unlock(&image_mutex);*/
   return 0;
 }
-#endif
 
 void*
 runInterpret(void *arg)
@@ -470,31 +465,54 @@ runInterpret(void *arg)
 }
 
 #if 0
+
 int32_t
 interpret()
 {
   uint32_t *display = core_->MemAlloc(200*200*4);
-  PP_TimeTicks lastTime = core_->GetTimeTicks();
-  PP_TimeTicks startTime = lastTime;
-  int count = 0;
+  strcat(status, display ? "display alloc'ed" : "display alloc failed");
   while(1) {
-    pthread_mutex_lock(&interpret_mutex);
-    pthread_cond_wait(&interpret_cond, &interpret_mutex);
-    pthread_mutex_unlock(&interpret_mutex);
     count++;
-    PP_TimeTicks now = core_->GetTimeTicks();
     if (count > 0) {
     /*if ((now - lastTime) > 0.5) { */
-      unsigned char r, g = 0, b, c;
+      unsigned char r, g = 0, b;
       uint32_t i, j;
-      r = (unsigned char)((now - startTime) / 0.1 + mouseX);
-      b = (unsigned char)((now - startTime) / 0.1 + mouseY);
-      sprintf(buffer, "%x, %x, %x\n", (unsigned int)((r+i)&0xFF), (unsigned int)g&0xFF, (unsigned int)(b&0xFF));
-      strcat(status, buffer);
+      r = (unsigned char)(count + mouseX);
+      b = (unsigned char)(count + mouseY);
       for (j = 0; j < 200; j++) {
 	g = j;
 	for (i = 0; i < 200; i++) {
-	  c = (((r+i)&0xFF) << 24) + ((g&0xFF) << 16) + ((b&0xFF) << 8) + 0xFF;
+	  uint32_t c = (((r+i)&0xFF) << 24) + ((g&0xFF) << 16) + ((b&0xFF) << 8) + 0xFF;
+	  display[j*200+i] = c;
+	}
+      }
+      if (!flush_pending) {
+	strcat(status, "display\n");
+	ioShowDisplay(display, 200, 200, 32, 0, 200, 0, 200);
+      }
+    }
+  }
+  return 0;
+}
+
+#endif
+
+#if 1
+int32_t
+interpret()
+{
+  uint32_t *display = core_->MemAlloc(200*200*4);
+  while(1) {
+    count++;
+    if ((count%0x1000000) == 0) {
+      unsigned char r, g = 0, b;
+      uint32_t i, j;
+      r = (unsigned char)(mouseX);
+      b = (unsigned char)(mouseY);
+      for (j = 0; j < 200; j++) {
+	g = j;
+	for (i = 0; i < 200; i++) {
+	  uint32_t c = (((r+i)&0xFF) << 24) + ((g&0xFF) << 16) + (((b+j)&0xFF) << 8) + 0xFF;
 	  display[j*200+i] = c;
 	}
       }
@@ -504,12 +522,3 @@ interpret()
   return 0;
 }
 #endif
-
-int32_t
-interpret()
-{
-  while(1) {
-    count++;
-  }
-  return 0;
-}
