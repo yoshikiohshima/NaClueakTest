@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <pthread.h>
+#include <sys/time.h>
+
 #include <ppapi/c/dev/ppb_var_deprecated.h>
 #include <ppapi/c/dev/ppp_class_deprecated.h>
 #include <ppapi/c/pp_errors.h>
@@ -186,8 +188,6 @@ Instance_HandleInputEvent(PP_Instance instance,
   if (event->type == PP_INPUTEVENT_TYPE_MOUSEMOVE) {
     mouseX = event->u.mouse.x;
     mouseY = event->u.mouse.y;
-    sprintf(buffer, "mouse: %d, %d\n", (int)mouseX, (int)mouseY);
-    strcat(status, buffer);
   }
   return PP_TRUE;
 }
@@ -341,7 +341,7 @@ CreateContext(PP_Instance instance, const struct PP_Size* size)
   strcat(status, "making gc\n");
   sprintf(buffer, "size: %d, %d\n", (int)size->width, (int)size->height);
   strcat(status, buffer);
-  /*pthread_mutex_lock(&image_mutex);*/
+  pthread_mutex_lock(&image_mutex);
   gc = graphics_2d_->Create(instance, size, false);
   if (!isContextValid() /*graphics_2d_->IsGraphics2D(gc)*/)
     strcat(status, "failed to create gc\n");
@@ -365,7 +365,7 @@ CreateContext(PP_Instance instance, const struct PP_Size* size)
     }
     image_data_->Unmap(image);
   }
-  /*pthread_mutex_unlock(&image_mutex); */
+  pthread_mutex_unlock(&image_mutex);
   {
     int ret = pthread_create(&interpret_thread, NULL, runInterpret, NULL);
     sprintf(buffer, "thread create %d\n", ret);
@@ -400,27 +400,6 @@ FlushPixelBuffer()
   flush_pending = 1;
   graphics_2d_->Flush(gc, CompletionCallback);
 }
-#if 0
-static void
-FlushPixelBufferInSync()
-{
-  struct PP_Point top_left;
-  /*  struct PP_Rect src_left = NULL;*/
-  top_left.x = 0;
-  top_left.y = 0;
-  strcat(status, "flush 1\n");
-  if (!isContextValid() /*!(graphics_2d_->IsGraphics2D(gc))*/) {
-    strcat(status, "flush 2\n");
-    flush_pending = 0;
-    return;
-  }
-  strcat(status, "flush 3\n");
-  graphics_2d_->PaintImageData(gc, image, &top_left, NULL);
-  flush_pending = 1;
-  /*  CompletionCallback.func = NULL; */
-  graphics_2d_->Flush(gc, CompletionCallback);
-}
-#endif
 
 static void
 Paint()
@@ -447,7 +426,7 @@ ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, 
   if (toQuit) {
     pthread_exit(NULL);
   }
-  /*pthread_mutex_lock(&image_mutex);*/
+  pthread_mutex_lock(&image_mutex);
   if (isContextValid()) {
     pixels = image_data_->Map(image);
     for (j = 0; j < screenHeight; j++) {
@@ -458,7 +437,7 @@ ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, 
     image_data_->Unmap(image);
     /*FlushPixelBuffer();*/
   }
-  /*pthread_mutex_unlock(&image_mutex);*/
+  pthread_mutex_unlock(&image_mutex);
   return 0;
 }
 
@@ -470,46 +449,20 @@ runInterpret(void *arg)
   return NULL;
 }
 
-#if 0
-
 int32_t
 interpret()
 {
+  struct timeval tv;
   uint32_t *display = core_->MemAlloc(200*200*4);
-  strcat(status, display ? "display alloc'ed" : "display alloc failed");
+  gettimeofday(&tv, NULL);
+  time_t start = (tv.tv_sec * 1000 * 1000) + tv.tv_usec;
+  sprintf(buffer, "start: %ld\n", (long int)start);
+  strcat(status, buffer);
   while(1) {
-    count++;
-    if (count > 0) {
-    /*if ((now - lastTime) > 0.5) { */
-      unsigned char r, g = 0, b;
-      uint32_t i, j;
-      r = (unsigned char)(count + mouseX);
-      b = (unsigned char)(count + mouseY);
-      for (j = 0; j < 200; j++) {
-	g = j;
-	for (i = 0; i < 200; i++) {
-	  uint32_t c = (((r+i)&0xFF) << 24) + ((g&0xFF) << 16) + ((b&0xFF) << 8) + 0xFF;
-	  display[j*200+i] = c;
-	}
-      }
-      if (!flush_pending) {
-	strcat(status, "display\n");
-	ioShowDisplay(display, 200, 200, 32, 0, 200, 0, 200);
-      }
-    }
-  }
-  return 0;
-}
-
-#endif
-
-#if 1
-int32_t
-interpret()
-{
-  uint32_t *display = core_->MemAlloc(200*200*4);
-  while(1) {
-    count++;
+    struct timeval tv2;
+    gettimeofday(&tv2, NULL);
+    time_t now = (tv.tv_sec * 1000 * 1000) + tv.tv_usec;
+    count += now;
     if ((count%0x1000000) == 0) {
       unsigned char r, g = 0, b;
       uint32_t i, j;
@@ -527,4 +480,3 @@ interpret()
   }
   return 0;
 }
-#endif
