@@ -74,6 +74,17 @@ static int32_t flush_pending;
 static char status[10000];
 static char buffer[1024];
 
+static void Log(char* message)
+{ 
+  int slen = strlen(status);
+  int mlen = strlen(message);
+  if (slen <= mlen)
+    status[0] = '\0';
+  else if (slen + mlen >= sizeof(status))
+    memmove(status, status + mlen, slen - mlen + 1);
+  strcat(status, message);
+}
+
 static struct PPP_Instance instance_interface = {
   &Instance_DidCreate,
   &Instance_DidDestroy,
@@ -162,7 +173,7 @@ Instance_DidChangeView(PP_Instance instance,
   if (position->size.width == screenWidth &&
       position->size.height == screenHeight)
     return;  // Size didn't change, no need to update anything.
-  strcat(status, "change view\n");
+  Log("change view\n");
   DestroyContext(instance);
   CreateContext(instance, &position->size);
 }
@@ -181,13 +192,13 @@ Instance_HandleInputEvent(PP_Instance instance,
     mouseX = event->u.mouse.x;
     mouseY = event->u.mouse.y;
     sprintf(buffer, "mouse: %d, %d\n", (int)mouseX, (int)mouseY);
-    strcat(status, buffer);
+    Log(buffer);
   }
   if (event->type == PP_INPUTEVENT_TYPE_MOUSEMOVE) {
     mouseX = event->u.mouse.x;
     mouseY = event->u.mouse.y;
     sprintf(buffer, "mouse: %d, %d\n", (int)mouseX, (int)mouseY);
-    strcat(status, buffer);
+    Log(buffer);
   }
   return PP_TRUE;
 }
@@ -282,7 +293,7 @@ PPP_InitializeModule(PP_Module a_module_id, PPB_GetInterface get_browser_interfa
   memset(&ppp_class, 0, sizeof(ppp_class));
   ppp_class.Call = Squeak_Call;
   ppp_class.HasMethod = Squeak_HasMethod;
-  strcat(status, "initialize module");
+  Log("initialize Squeak module\n");
   {
     pthread_mutex_init(&image_mutex, NULL);
     pthread_mutex_init(&interpret_mutex, NULL);
@@ -321,7 +332,7 @@ PPP_ShutdownModule()
 static void 
 DestroyContext(PP_Instance instance)
 {
-  strcat(status, isContextValid() ? "destroy good\n" : "destroy bad\n");
+  Log(isContextValid() ? "destroy good\n" : "destroy bad\n");
   if (isContextValid()) {
     pthread_mutex_lock(&image_mutex);
     core_->ReleaseResource(gc);
@@ -338,18 +349,18 @@ CreateContext(PP_Instance instance, const struct PP_Size* size)
   if (isContextValid())
     return;
 
-  strcat(status, "making gc\n");
+  Log("making gc\n");
   sprintf(buffer, "size: %d, %d\n", (int)size->width, (int)size->height);
-  strcat(status, buffer);
+  Log(buffer);
   /*pthread_mutex_lock(&image_mutex);*/
   gc = graphics_2d_->Create(instance, size, false);
   if (!isContextValid() /*graphics_2d_->IsGraphics2D(gc)*/)
-    strcat(status, "failed to create gc\n");
+    Log("failed to create gc\n");
   if (!instance_->BindGraphics(instance, gc)) {
-    strcat(status, "couldn't bind gc\n");
+    Log("couldn't bind gc\n");
   }
 
-  strcat(status, "make image\n");
+  Log("make image\n");
   image = image_data_->Create(instance, PP_IMAGEDATAFORMAT_BGRA_PREMUL,
 				size,
 				PP_FALSE);
@@ -369,14 +380,14 @@ CreateContext(PP_Instance instance, const struct PP_Size* size)
   {
     int ret = pthread_create(&interpret_thread, NULL, runInterpret, NULL);
     sprintf(buffer, "thread create %d\n", ret);
-    strcat(status, buffer);
+    Log(buffer);
   }
 }
 
 static void
 FlushCallback(void *user_data, int32_t result)
 {
-  strcat(status, "flush complete\n");
+  Log("flush complete\n");
   flush_pending = 0;
 }
 
@@ -389,13 +400,13 @@ FlushPixelBuffer()
   /*  struct PP_Rect src_left = NULL;*/
   top_left.x = 0;
   top_left.y = 0;
-  strcat(status, "flush 1\n");
+  Log("flush 1\n");
   if (!isContextValid() /*!(graphics_2d_->IsGraphics2D(gc))*/) {
-    strcat(status, "flush 2\n");
+    Log("flush 2\n");
     flush_pending = 0;
     return;
   }
-  strcat(status, "flush 3\n");
+  Log("flush 3\n");
   graphics_2d_->PaintImageData(gc, image, &top_left, NULL);
   flush_pending = 1;
   graphics_2d_->Flush(gc, CompletionCallback);
@@ -408,13 +419,13 @@ FlushPixelBufferInSync()
   /*  struct PP_Rect src_left = NULL;*/
   top_left.x = 0;
   top_left.y = 0;
-  strcat(status, "flush 1\n");
+  Log("flush 1\n");
   if (!isContextValid() /*!(graphics_2d_->IsGraphics2D(gc))*/) {
-    strcat(status, "flush 2\n");
+    Log("flush 2\n");
     flush_pending = 0;
     return;
   }
-  strcat(status, "flush 3\n");
+  Log("flush 3\n");
   graphics_2d_->PaintImageData(gc, image, &top_left, NULL);
   flush_pending = 1;
   /*  CompletionCallback.func = NULL; */
@@ -426,9 +437,9 @@ static void
 Paint()
 {
   sprintf(buffer, "paint 1, count = %d\n", (int)count);
-  strcat(status, buffer);
+  Log(buffer);
   if (!flush_pending) {
-    strcat(status, "paint 2\n");
+    Log("paint 2\n");
     FlushPixelBuffer();
   }
 }
@@ -465,7 +476,7 @@ ioShowDisplay(uint32_t *dispBits, int32_t width, int32_t height, int32_t depth, 
 void*
 runInterpret(void *arg)
 {
-  strcat(status, "run interpret\n");
+  Log("run interpret\n");
   interpret();
   return NULL;
 }
@@ -476,7 +487,7 @@ int32_t
 interpret()
 {
   uint32_t *display = core_->MemAlloc(200*200*4);
-  strcat(status, display ? "display alloc'ed" : "display alloc failed");
+  Log(display ? "display alloc'ed" : "display alloc failed");
   while(1) {
     count++;
     if (count > 0) {
@@ -493,7 +504,7 @@ interpret()
 	}
       }
       if (!flush_pending) {
-	strcat(status, "display\n");
+	Log("display\n");
 	ioShowDisplay(display, 200, 200, 32, 0, 200, 0, 200);
       }
     }
