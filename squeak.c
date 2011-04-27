@@ -23,6 +23,10 @@
 #include <ppapi/c/ppb_image_data.h>
 #include <ppapi/c/ppb_graphics_2d.h>
 #include <ppapi/c/ppb_core.h>
+#include <ppapi/c/ppb_var.h>
+#include <ppapi/c/ppb_url_loader.h>
+#include <ppapi/c/ppb_url_request_info.h>
+#include <ppapi/c/ppb_url_response_info.h>
 #include <ppapi/c/pp_input_event.h>
 #include <ppapi/c/pp_completion_callback.h>
 
@@ -60,16 +64,25 @@ const struct PPB_Graphics2D* graphics_2d_;
 const struct PPB_ImageData* image_data_;
 const struct PPB_Core* core_;
 const struct PPB_Instance* instance_;
+const struct PPB_URLLoader* loader_;
+const struct PPB_URLRequestInfo* requestInfo_;
+const struct PPB_URLResponseInfo* responseInfo_;
+const struct PPB_Var* var_;
 
 static PP_Resource gc = 0;
 static PP_Resource image = 0;
+static PP_Resource loader = 0;
+static PP_Resource requestInfo = 0;
+static PP_Resource responseInfo = 0;
+
 static pthread_mutex_t image_mutex;
-static pthread_mutex_t interpret_mutex;
 static pthread_t interpret_thread;
-static pthread_cond_t interpret_cond = PTHREAD_COND_INITIALIZER;
 
 static const char* const kPaintMethodId = "paint";
 static const char* const kGetStatusMethodId = "getStatus";
+static const char* const kGetLoaderStatusMethodId = "getLoaderStatus";
+
+struct PP_Var loader_status;
 
 static int32_t flush_pending;
 
@@ -125,6 +138,30 @@ getDesc()
   return PP_FALSE;
 }
 
+int32_t
+GetContentLength(struct PP_Var var)
+{
+  uint32_t headerLen;
+  int32_t len;
+  char c;
+  const char *cStr = var_interface->VarToUtf8(var, &headerLen);
+  char *occurence;
+  occurence = strstr(cStr, "Content-Length: ");
+  if (!occurence) {
+    return -1;
+  }
+  occurence += strlen("Content-Length: ");
+  len = 0;
+  c = *occurence++;
+  while ('0' <= c && c <= '9') {
+    len *= 10;
+    len += (c - '0');
+    c = *occurence++;
+  }
+  return len;
+}
+
+
 /**
  * Returns C string contained in the @a var or NULL if @a var is not string.
  * @param[in] var PP_Var containing string.
@@ -155,13 +192,48 @@ PP_Var StrToVar(const char* str)
   return PP_MakeUndefined();
 }
 
+static char *file;
+
+static void
+ReadCallback(void *user_data, int32_t result)
+{
+  sprintf(buffer, "read result: %d\n", (int)result);
+  Log(buffer);
+}
+
+static struct PP_CompletionCallback ReadCompletionCallback = {ReadCallback, 0};
+
+static void
+LoadCallback(void *user_data, int32_t result)
+{
+  int32_t len;
+  responseInfo = loader_->GetResponseInfo(loader);
+  loader_status = responseInfo_->GetProperty(responseInfo, PP_URLRESPONSEPROPERTY_HEADERS);
+  len = GetContentLength(loader_status);
+  sprintf(buffer, "len: %d\n", (int)len);
+  Log(buffer);
+  if (len > 0) {
+    file = malloc(len);
+    Log (file ? "file buffer allocated\n" : "allocation failed\n");
+    loader_->ReadResponseBody(loader, file, len, ReadCompletionCallback);
+  }
+}
+
+static struct PP_CompletionCallback LoadCompletionCallback = {LoadCallback, 0};
+
 static PP_Bool
 Instance_DidCreate(PP_Instance instance,
                                   uint32_t argc,
                                   const char* argn[],
                                   const char* argv[])
 {
-  return PP_TRUE;
+  loader = loader_->Create(instance);
+  requestInfo = requestInfo_->Create(instance);
+  requestInfo_->SetProperty(requestInfo, PP_URLREQUESTPROPERTY_URL, StrToVar("http://localhost:5103/NaClueakTest/foo.image"));
+  requestInfo_->SetProperty(requestInfo, PP_URLREQUESTPROPERTY_METHOD, StrToVar("GET"));
+  loader_->Open(loader, requestInfo, LoadCompletionCallback);
+  Log("loader open\n");
+  return loader ? PP_TRUE : PP_FALSE;
 }
 
 static void Instance_DidDestroy(PP_Instance instance) {
@@ -235,6 +307,8 @@ Squeak_HasMethod(void* object,
       return true;
     if (strcmp(method_name, kGetStatusMethodId) == 0)
       return true;
+    if (strcmp(method_name, kGetLoaderStatusMethodId) == 0)
+      return true;
   }
   return false;
 }
@@ -264,6 +338,8 @@ Squeak_Call(void* object,
     }
     if (strcmp(method_name, kGetStatusMethodId) == 0)
       return StrToVar(status);
+    if (strcmp(method_name, kGetLoaderStatusMethodId) == 0)
+      return loader_status;
   }
   return v;
 }
@@ -290,14 +366,20 @@ PPP_InitializeModule(PP_Module a_module_id, PPB_GetInterface get_browser_interfa
     get_browser_interface(PPB_GRAPHICS_2D_INTERFACE);
   image_data_ = (const struct PPB_ImageData*)
     get_browser_interface(PPB_IMAGEDATA_INTERFACE);
+  loader_ = (const struct PPB_URLLoader*)
+    get_browser_interface(PPB_URLLOADER_INTERFACE);
+  requestInfo_ = (const struct PPB_URLRequestInfo*)
+    get_browser_interface(PPB_URLREQUESTINFO_INTERFACE);
+  responseInfo_ = (const struct PPB_URLResponseInfo*)
+    get_browser_interface(PPB_URLRESPONSEINFO_INTERFACE);
+  var_ = (const struct PPB_Var*)
+    get_browser_interface(PPB_VAR_INTERFACE);
   memset(&ppp_class, 0, sizeof(ppp_class));
   ppp_class.Call = Squeak_Call;
   ppp_class.HasMethod = Squeak_HasMethod;
   Log("initialize Squeak module\n");
   {
     pthread_mutex_init(&image_mutex, NULL);
-    pthread_mutex_init(&interpret_mutex, NULL);
-    pthread_cond_init (&interpret_cond, NULL);
   }
 
   return PP_OK;

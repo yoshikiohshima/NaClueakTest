@@ -46,6 +46,16 @@
        updateStatus(statusText);
     }
 
+    function getLoaderStatus() {
+      var statusText;
+      try {
+        statusText = squeakModule.getLoaderStatus();
+      } catch(e) {
+        alert(e.message);
+      }
+       updateStatus(statusText);
+    }
+
     function testStatus() {
       var statusBox = document.getElementById('status_checkbox');
       if (statusBox.checked) {
@@ -82,6 +92,7 @@
     <br />
   <form name="squeak_form" action="" method="get">
     <input type="button" value="Call getStatus()" onclick="getSqueakStatus()">
+    <input type="button" value="Call getLoaderStatus()" onclick="getLoaderStatus()">
     <input type="checkbox" id="status_checkbox"> Update status 
   </form>
 	<table>
