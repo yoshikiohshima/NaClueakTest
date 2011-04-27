@@ -387,7 +387,6 @@ CreateContext(PP_Instance instance, const struct PP_Size* size)
 static void
 FlushCallback(void *user_data, int32_t result)
 {
-  Log("flush complete\n");
   flush_pending = 0;
 }
 
@@ -400,13 +399,10 @@ FlushPixelBuffer()
   /*  struct PP_Rect src_left = NULL;*/
   top_left.x = 0;
   top_left.y = 0;
-  Log("flush 1\n");
   if (!isContextValid() /*!(graphics_2d_->IsGraphics2D(gc))*/) {
-    Log("flush 2\n");
     flush_pending = 0;
     return;
   }
-  Log("flush 3\n");
   graphics_2d_->PaintImageData(gc, image, &top_left, NULL);
   flush_pending = 1;
   graphics_2d_->Flush(gc, CompletionCallback);
@@ -415,10 +411,7 @@ FlushPixelBuffer()
 static void
 Paint()
 {
-  sprintf(buffer, "paint 1, count = %d\n", (int)count);
-  Log(buffer);
   if (!flush_pending) {
-    Log("paint 2\n");
     FlushPixelBuffer();
   }
 }
@@ -474,7 +467,7 @@ interpret()
     gettimeofday(&tv2, NULL);
     time_t now = (tv.tv_sec * 1000 * 1000) + tv.tv_usec;
     count += now;
-    if ((count%0x1000000) == 0) {
+    if ((count%0x20000) == 0) {
       unsigned char r, g = 0, b;
       uint32_t i, j;
       r = (unsigned char)(mouseX);
